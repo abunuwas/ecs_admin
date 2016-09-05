@@ -23,13 +23,13 @@ aws_access_parameters = {
 #cloudwatch_client = boto3.client('cloudwatch', **aws_access_parameters)
 
 
-# Get AWS clients 
+# Get AWS clients and resources 
 ecs_client = boto3.client('ecs')
 iam_client = boto3.client('iam')
 cloudwatch_client = boto3.client('cloudwatch')
 lambda_client = boto3.client('lambda')
 ec2_client = boto3.client('ec2')
-#ec2_resource = boto3.resource('ec2')
+ec2_resource = boto3.resource('ec2')
 sns_client = boto3.client('sns')
 
 def subscribe_sns_topic(arn=None, protocol=None, endpoint=None):
@@ -281,25 +281,157 @@ def set_count_services_zero(cluster=None, services=None):
 	for service in services:
 		update_service(cluster=cluster, service=service, desired_count=0, task_definition=None, deployment_conf=None)
 
+def delete_cluster(cluster):
+	response = ecs_client.delete_cluster(cluster=cluster)
+	return response 
+
+def delete_service(cluster=None, service=None):
+	response = ecs_client.delete_service(cluster=cluster, service=service)
+	return response 
+
+def delete_services(cluster=None, services=None):
+	for service in services:
+		delete_service(cluster, service)
+
+def list_task_definitions():
+	tasks = ecs_client.list_task_definitions()['taskDefinitionArns']
+	return tasks
+
+def describe_task_definition(family=None, revision=None):
+	response = ecs_client.describe_task_definition(taskDefinition=family)['taskDefinition']
+	return response 
+
+def deregister_task_def(task=None):
+	response = ecs_client.deregister_task_definition(taskDefinition=task)
+	return response 
+
+def list_ec2():
+	ec2s = ec2_resource.instances.all()
+	return ec2s
+
+def describe_ec2(ec2):
+	description = ec2_client.describe_instances(InstanceIds=ec2)
+	return description['Reservations']
+
+def stop_instances(instances):
+	respnse = ec2_client.stop_instances(InstanceIds=instances)
+	return response 
+
+def terminate_instances(instances):
+	response = ec2_client.terminate_instances(InstanceIds=instances)
+	return response 
+
+#ec2s = list_ec2()
+#for ec2 in ec2s:
+#	description = describe_ec2([ec2._id])[0]
+#	print(description.keys())
+
+def list_clusters():
+	clusters = ecs_client.list_clusters()
+	return clusters['clusterArns']
+
+#clusters = list_clusters()
+#print(clusters)
+
+def describe_clusters():
+	clusters = list_clusters()
+	details = ecs_client.describe_clusters(clusters=clusters)
+	return details['clusters']
+
+def describe_cluster(cluster_name=None):
+	cluster = list(filter(lambda cluster: cluster_name in cluster, list_clusters()))
+	details = ecs_client.describe_clusters(clusters=cluster)
+	return details['clusters'][0]
+
+def list_instances(cluster=None):
+	instances = ecs_client.list_container_instances(cluster=cluster)
+	return instances['containerInstanceArns']
+
+def describe_instances(cluster=None):
+	instances = ecs_client.describe_container_instances(cluster=cluster, containerInstances=list_instances(cluster))
+	return instances['containerInstances']
+
+def deregister_instance(cluster, instance):
+	response = ecs_client.deregister_container_instance(cluster=cluster, containerInstance=instance, force=True)
+	return response 
+
+def deregister_instances(cluster, instances):
+	for instance in instances:
+		deregister_instance(cluster, instance)
+		print('ECS agent deregistered instance: {}'.format(instance))
+		time.sleep(1)
+	return None
+
+#instances = describe_instances('xmpp_component_cluster')
+#print(instances)
+
+#details = describe_clusters()
+#print(details)
+
+#details = describe_cluster('xmpp_component_cluster')
+#print(details)
+
 def clearup_cluster(cluster):
 	services = list_services(cluster)
 	set_count_services_zero(cluster, services)
+	print('Number of desired tasks set to 0.')
 	time.sleep(2)
 	stop_tasks(cluster)
+	print('Stopped running tasks.')
 	time.sleep(2)
-	
+	tasks = list_tasks(cluster)
+	for task in tasks:
+		deregister_task_def(task)
+	print('Deregistered all active tasks in the cluster.')
+	time.sleep(1)
+	delete_services(cluster, services)
+	print('Deleted all services registered with the cluster.')
+	time.sleep(1)
+	cluster_instances = list(list_instances(cluster))
+	deregister_instances(cluster, cluster_instances)
+	print('Deregistered all container instances within the cluster.')
+	time.sleep(1)
+	try:
+		stop_instances(cluster_instances)
+		print('Stopped container instances in the cluster.')
+		time.sleep(5)
+	except ClientError:
+		print('No running instance within the cluster found.')
+	try:
+		terminate_instances(cluster_instances)
+		print('Termianted container instances in the cluster, no instance to stop.')
+		time.sleep(5)
+	except ClientError:
+		print('No running instance within the cluster found, no instance to terminate.')
+	response = delete_cluster(cluster)
+	print('Deleted cluster {}.'.format(cluster))
+	return response 
+
 
 cluster = 'xmpp_component_cluster'
 #services = list_services(cluster)
 #print(services)
 #tasks = list_tasks(cluster)
 #print(tasks)
+#definitions = list_task_definitions()
+#print('TASKS DEFINITIONS')
+#for definition in definitions:
+#	description = describe_task_definition(definition)
+#	print(definition)
+#	print(description)
 #services_description = describe_services(cluster)
 #print(services_description[0].keys())
+#service_task_def = services_description[0]['taskDefinition']
+#print(service_task_def)
+#service_task_def_description = describe_task_definition(service_task_def)
+#print(service_task_def_description)
 #set_count_services_zero(cluster, services)
 #tasks_descriptions = describe_tasks(cluster)
 #print(tasks_descriptions)
-response = stop_tasks(cluster)
+#response = stop_tasks(cluster)
+#print(response)
+
+response = clearup_cluster(cluster)
 print(response)
 
 def create_policy(policy_name=None, path=None, policy_document=None, description=None):
@@ -414,30 +546,10 @@ def test_metric_alarm(namespace=None, metric_name=None, metric_values=None, alar
 									StateValue='OK',
 									StateReason='Test finished, back to OK state.')
 
-def list_clusters():
-	clusters = ecs_client.list_clusters()
-	return clusters['clusterArns']
-
-#clusters = list_clusters()
-#print(clusters)
-
-def describe_clusters():
-	clusters = list_clusters()
-	details = ecs_client.describe_clusters(clusters=clusters)
-	return details['clusters']
-
-def describe_cluster(cluster_name):
-	cluster = list(filter(lambda cluster: cluster_name in cluster, list_clusters()))
-	details = ecs_client.describe_clusters(clusters=cluster)
-	return details['clusters'][0]
-
-#details = describe_clusters()
-#print(details)
-
-#details = describe_cluster('xmpp_component_cluster')
-#print(details)
 
 def list_roles():
+	# MEJORAR
+	# Return an iterator or something, don't just print!!
 	roles = iam_client.list_roles()['Roles']
 	for role in roles:
 		print(role['RoleName'], role['Arn'])
@@ -623,25 +735,7 @@ def list_lambdas():
 	lambdas = lambda_client.list_functions()
 	return lambdas['Functions']
 
-
-def list_ec2():
-	pass #with ecs_resource = boto3.resource('ec2')
-
 #list roles; list instance profiles; 
-
-def describe_service(service_name=None, cluster=None):
-	services = ecs_client.describe_services(cluster=cluster,
-							services=[service_name])['services'][0]
-	return services
-
-def list_task_definitions():
-	tasks = ecs_client.list_task_definitions()['taskDefinitionArns']
-	return tasks
-
-
-def describe_task_definition(family=None, revision=None):
-	response = ecs_client.describe_task_definition(taskDefinition=family)['taskDefinition']
-	return response 
 
 
 if __name__ == '__main__':
@@ -798,9 +892,6 @@ if __name__ == '__main__':
 	#							desired_count=2, 
 	#							task_definition=None)
 	#print(service)
-
-	#service = describe_service(cluster='xmpp_component_cluster', service_name='xmpp_component_service')
-	#print(service['desiredCount'])
 
 
 	high_values = (random.randint(51,100) for i in range(65))
