@@ -636,20 +636,8 @@ def add_group_rule(group=None):
 															)
 	return response
 
-def register_ec2():
-	response = ecs_client.register_container_instance(cluster='xmpp_component_cluster',
-														#containerInstanceArn=
-														#attributes=[{
-														#			'name': 'service',
-														#			'value': 'xmpp_component'
-														#		}
-														#	]
-														)
-	return response
-
-
-def attach_policy(name=None, policy_arn=None):
-	response = iam_client.attach_role_policy(RoleName=name,
+def attach_policy(role_name=None, policy_arn=None):
+	response = iam_client.attach_role_policy(role_name=name,
 							PolicyArn=policy_arn)
 	return response
 
@@ -739,31 +727,9 @@ def list_lambdas():
 
 
 if __name__ == '__main__':
-	'''
-	create_scaleup_alarm()
-	create_scaledown_alarm()
-	metrics = cloudwatch_client.list_metrics()
-	print(metrics)
-	for metric in metrics['Metrics']:
-		for data in metric['Dimensions']:
-			print(data)
-	
-	now = datetime.datetime.now() - datetime.timedelta(hours=3)
-	for i in range(65):
-		#now += datetime.timedelta(minutes=1)
-		now = datetime.datetime.now() - datetime.timedelta(hours=1)
-		value=random.randint(50,100)
-		response = log_metric(date=now, value=value)
-		print(response)
-		print(now)
-		print(value)
-		time.sleep(1)
-	'''
 	#task_role = create_role(path='/xmpp_component', 
-	#						role_name='xmpp_component_task_staging', 
-	#						policy_doc=task_role_policy_document)
-	#lambda_role = create_role(role_name='lambda_scaleup',
-	#						policy_doc=)
+	#						role_name='xmpp_component_task', 
+	#						policy_doc=task_role_policy)
 	#lambda_role = create_role(name='lambda_ecs_role', policy=lambda_role_trust_policy)
 	#print(lambda_role)
 	'''
@@ -827,9 +793,7 @@ if __name__ == '__main__':
 									StateReason='Test finished, back to OK state.')
 	'''
 	#print(task_role_policy_document)
-	#task_role = create_role()
-	#print(task_role)
-	#cluster = create_cluster()
+	#cluster = create_cluster(cluster)
 	#print(cluster)
 	#task = create_task_definition()
 	#print(task)
