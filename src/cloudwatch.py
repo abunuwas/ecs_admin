@@ -86,3 +86,6 @@ def log_metric(metric_name=None, metric_value=None, namespace=None):
 	#ComparisonOperator='GreaterThanOrEqualToThreshold'
 	)
 	return response 
+
+def set_state_alarm():
+	pass 
