@@ -455,11 +455,6 @@ def create_role(path=None, name=None, policy=None):
 		)
 	return role
 
-
-def get_task_role_arn(task_role):
-	task_role_arn = task_role['arn'] # not sure if this really works
-	return task_role_arn
-
 task_role_arn = 'arn:aws:iam::876701361933:role/xmpp_component_task_role'
 
 def create_task_definition():
@@ -559,7 +554,7 @@ docker_login = open('docker-login.txt').read()
 
 
 def create_instance_profile(name=None, path=None):
-	profile = iam_client.create_instance_profile(InstanceProfileName='ec2InstanceProfileECS')
+	profile = iam_client.create_instance_profile(InstanceProfileName=name)
 	return profile
 
 def update_instance_profile():
@@ -736,7 +731,7 @@ if __name__ == '__main__':
 	response = delete_lambda('xmpp_component_scaleup')
 	print(response)
 	function = create_lambda(name='xmpp_component_scaleup',
-							role='arn:aws:iam::876701361933:role/lambda_ecs_role',
+							role_arn='arn:aws:iam::876701361933:role/lambda_ecs_role',
 							handler='.lambda_scaleuplambda_handler',
 							code_file=os.path.abspath('lambda_scaleup.py'),
 							description='A lambda function to increase the number of components running in the cluster.'
@@ -801,7 +796,6 @@ if __name__ == '__main__':
 	#ec2_instance_role = create_role(name='ec2InstanceRole', policy=ec2_trust_policy)
 	#print(ec2_instance_role)
 
-
 	#list_roles()
 	#service = create_service()
 	#print(service)
@@ -812,8 +806,6 @@ if __name__ == '__main__':
 	#policies = iam_client.list_policies()['Policies']
 	#for policy in policies:
 	#	print(policy['PolicyName'], policy['Arn'])
-
-
 
 	#response = attach_policy(name='ec2InstanceRole', policy_arn='arn:aws:iam::876701361933:policy/ecs_role_policy')
 	#print(response)
