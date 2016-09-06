@@ -64,7 +64,7 @@ def documents_have_permission(documents, permission):
 #document = {'Statement': [{'Action': ['logs:*'], 'Effect': 'Allow', 'Resource': 'arn:aws:logs:*:*:*'}, {'Action': ['ecs:DescribeServices', 'ecs:UpdateService'], 'Effect': 'Allow', 'Resource': ['*']}], 'Version': '2012-10-17'}
 #permission = 'ecs:DescribeServices'
 
-#print(document_has_permission(document, permission))
+#print(document_has_permission(document, permission)) -> True
 
 def role_has_permissions(role_name, permissions):
 	'''
@@ -77,10 +77,10 @@ def role_has_permissions(role_name, permissions):
 	policies  = get_role_attached_policies(role_name)
 	policies_descriptions = [describe_policy(policy['PolicyArn']) for policy in policies]
 	policies_documents = [get_policy_document(policy['Arn'], policy['DefaultVersionId']) for policy in policies_descriptions]
-	return documents_have_permission(policies_documents, permissions)
+	return all(documents_have_permission(policies_documents, permission) for permission in permissions)
 
 #description = describe_policy(policy_arn)
-#print(description)
+#print(description) 
 
 #version = description['DefaultVersionId']
 
@@ -96,9 +96,6 @@ def role_has_permissions(role_name, permissions):
 #for statement in doc_statements:
 #	print(statement['Action'])
 
-documents = role_has_permissions('lambda_ecs_role', 'ecs:DescribeServices')
-print(documents)
-#for doc in documents:
-#	for statement in doc['Statement']:
-#		print('ecs:DescribeServices' in statement['Action'])
+#documents = role_has_permissions('lambda_ecs_role', ['ecs:DescribeServices', 'ecs:UpdateService'])
+#print(documents) -> True
 
