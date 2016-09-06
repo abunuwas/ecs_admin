@@ -1,4 +1,9 @@
 import boto3
+
+from botocore.exceptions import ClientError
+
+from exceptions import EntityExists, LimitExceeded
+
 iam_client = boto3.client('iam')
 ec2_client = boto3.client('ec2')
 ec2_resource = boto3.resource('ec2')
@@ -28,8 +33,19 @@ def add_group_rule(group=None):
 															)
 	return response
 
-def create_instance_profile(name=None, path=None):
-	profile = iam_client.create_instance_profile(InstanceProfileName='ec2InstanceProfileECS')
+def _create_instance_profile(name=None, path=None):
+	try:
+		profile = iam_client.create_instance_profile(InstanceProfileName=name)
+	except ClientError as e:
+		if e.response['Error']['Code'] == 'EntityAlreadyExists':
+			raise EntityExists
+	return profile
+
+def create_instance_profile(**kwargs):
+	try:
+		profile = _create_instance_profile(**kwargs)
+	except EntityExists:
+		profile = None
 	return profile
 
 def list_instance_profiles():
@@ -40,12 +56,25 @@ def update_instance_profile():
 	pass
 
 
-def add_role2profile(role_name=None, profile_name=None):
-	response = iam_client.add_role_to_instance_profile(InstanceProfileName='ec2InstanceProfileECS',
-														RoleName='ec2InstanceRole')
-	return response
+def _add_role2profile(role_name=None, profile_name=None):
+	try:
+		response = iam_client.add_role_to_instance_profile(InstanceProfileName=profile_name,
+														RoleName=role_name)
+		return response
+	except ClientError as e:
+		if e.response['Error']['Code'] == 'LimitExceeded':
+			raise LimitExceeded
 
-docker_login = open('docker-login.txt').read()
+def add_role2profile(**kwargs):
+	try:
+		response = _add_role2profile(**kwargs)
+	except LimitExceeded:
+		print('Instance profile already has an IAM role.')
+		response = 'Instance profile already has an IAM role.'
+	return response 
+
+def get_user_data(file):
+	return open(file).read()
 
 def find_images():
 	images = ec2_client.describe_images(Filters=[
@@ -72,7 +101,7 @@ def iso2map(iso):
 	'''
 	Parses a date in ISO format, e.g. 2015-10-28T21:08:08.000Z,
 	and returns a map object with year, month converted into int
-	types. The values must be unpacked. 
+	types. The return values must be unpacked. 
 	'''
 	year_month_day_str_list = iso[:10].split('-')
 	return map(int, year_month_day_str_list)
@@ -89,7 +118,7 @@ def get_most_recent_opt_AMI():
 	maxim = max(images, key=lambda x: get_dt(x))
 	return maxim
 
-def launch_ec2():
+def launch_ec2(key_name, security_groups, user_data, profile_arn, min_count=1, max_count=1, instance_type='t2.micro', monitoring=True):
 	image_id = get_most_recent_opt_AMI()['ImageId']
 	instance = ec2_client.run_instances(#ryRun=True,
 				ImageId=image_id,
