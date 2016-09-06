@@ -1,4 +1,12 @@
+import os
+import uuid
+
 import boto3
+from botocore.exceptions import ClientError
+
+from core_utils import filter_args
+
+
 ecs_client = boto3.client('ecs')
 
 
@@ -57,19 +65,23 @@ def delete_cluster(cluster):
 
 
 
-def create_service():
-	service = ecs_client.create_service(
-		cluster='xmpp_component_cluster',
-		serviceName='xmpp_component_service',
-		taskDefinition='xmpp_component_1:1',
-		desiredCount=1,
-		#role='arn:aws:iam::876701361933:role/ec2InstanceRole', # 'ecs_role' | 'ecs_xmpp_component_role'
-		clientToken=str(uuid.uuid3(uuid.NAMESPACE_DNS, 'xmpp_component_cluster')),
-		deploymentConfiguration={
-			'maximumPercent': 150,
-			'minimumHealthyPercent': 50
-			}
-		)
+def create_service(cluster, service_name, task_definition, desired_count=1, max_health=150, min_health=50):
+	try:
+		service = ecs_client.create_service(
+			cluster=cluster,
+			serviceName=service_name,
+			taskDefinition=task_definition,
+			desiredCount=desired_count,
+			#role='arn:aws:iam::876701361933:role/ec2InstanceRole', # 'ecs_role' | 'ecs_xmpp_component_role'
+			clientToken=str(uuid.uuid3(uuid.NAMESPACE_DNS, cluster)),
+			deploymentConfiguration={
+				'maximumPercent': max_health,
+				'minimumHealthyPercent': min_health
+				}
+			)
+		return service
+	except ClientError as e:
+		return e
 
 def list_services(cluster):
 	services = ecs_client.list_services(cluster=cluster)
@@ -107,32 +119,36 @@ def delete_services(cluster=None, services=None):
 
 
 
-def create_task_definition():
-	task_definition = ecs_client.register_task_definition(
-		family='xmpp_component_2', #families allow us to track multiple versions of the same task definition
-		#taskRoleArn=task_role_arn, # The task role that the containers in this task will assume. 
-		#networkMode='', # bridge | host | none,
-		containerDefinitions=[
-			{
-				'name': 'xmpp_component',
-				'image': 'abunuwas/xmpp-component:v.0.0.1',
-				'cpu': 100, # No idea...
-				'memory': 100, # The Docker daemon reserves a min. of 4 MiB for containers. If the container exceeds this threshold, it's killed, so this represents a hard max. limit of mem use
+def define_container(image, 
+					 name, 
+					 command=None, 
+					 working_dir=None, 
+					 cpu=100, 
+					 memory=100, 
+					 essential=True, 
+					 disable_networking=None, 
+					 privileged=None, 
+					 readonly=True
+					 ):
+	api_args = { 
+				'name': name,
+				'image': image,
+				'cpu': cpu,
+				'memory': memory,
 				#'memoryReservation': 200, # Minimum amount of memory reserved for the container
 				#'links': [],
-				#'portMappings': [],
-				'essential': True,
+				#'portMappings': [],				'essential': essential,
 				#'entryPoint': ['/application/src'],
-				'command': ['python3, application.py'],
+				'command': command,
 				#'environment': [],
 				#'mountPoints': [],
 				#'volumesFrom': [],
 				#'hostname': '',
-				#'user': '',
-				'workingDirectory': '/application',
-				'disableNetworking': False,
-				'privileged': False,
-				'readonlyRootFilesystem': True
+				#'user': '
+				'workingDirectory': working_dir,
+				'disableNetworking': disable_networking,
+				'privileged': privileged,
+				'readonlyRootFilesystem': readonly
 				#'dnsServers': [],
 				#'dnsSearchDomains': [],
 				#'extraHosts': [],
@@ -141,14 +157,23 @@ def create_task_definition():
 				#'ulimits': [],
 				#'logConfiguration': {},
 				#'logDriver': '',
-				#'options': {}
-				},
-			],
+				#'options': {}				 
+				}
+	return filter_args(api_args, filter_params=['', None])
+
+#definition = define_container('image', 'name')
+#print(definition) #-> {'readonlyRootFilesystem': True, 'name': 'name', 'cpu': 100, 'image': 'image', 'memory': 100, 'essential': True}
+
+
+def create_task_definition(family, containers, volumes=None):
+	task_definition = ecs_client.register_task_definition(
+		family=family, #families allow us to track multiple versions of the same task definition
+		containerDefinitions=containers
 		#volumes=[]
 		)
 
-def list_task_definitions():
-	tasks = ecs_client.list_task_definitions()['taskDefinitionArns']
+def list_task_definitions(family=None):
+	tasks = ecs_client.list_task_definitions(familyPrefix=family)['taskDefinitionArns']
 	return tasks
 
 def describe_task_definition(family=None, revision=None):
@@ -183,3 +208,15 @@ def stop_tasks(cluster):
 	for task in tasks:
 		stop_task(cluster, task)
 	return None
+
+#task_defs = list_task_definitions(family='xmpp_component')
+#for task in task_defs:
+#	print(task)
+
+#cluster = create_cluster('xmpp_component_cluster_1')
+
+if not list_services('xmpp_component_cluster_1'):
+	print('No services found.')
+
+for service in list_services('xmpp_component_cluster'):
+	print(service)
