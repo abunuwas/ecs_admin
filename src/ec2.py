@@ -3,37 +3,47 @@ import boto3
 from botocore.exceptions import ClientError
 
 from exceptions import EntityExists, LimitExceeded
+from core_utils import filter_args
+
+
 
 iam_client = boto3.client('iam')
 ec2_client = boto3.client('ec2')
 ec2_resource = boto3.resource('ec2')
 
-def create_group():
-	group = ec2_client.create_security_group(DryRun=True,
-											GroupName='ECS_Group',
-											Description='Security group for instances running in a cluster.'
-											)
+def _create_key_pair(key_name):
+	try: 
+		key_pair = ec2_client.create_key_pair(KeyName=key_name)
+		return key_pair
+	except ClientError as e:
+		if e.response['Error']['Code'] == 'InvalidKeyPair.Duplicate':
+			raise EntityExists
+
+
+def create_security_group(name, description, dry_run=False):
+	api_args = {
+				'DryRun': dry_run,
+				'GroupName': name,
+				'Description': description
+	}
+	try:
+		group = ec2_client.create_security_group(**api_args)
+	except ClientError as e:
+		if e['Error']['Code'] == 'InvalidGroup.Duplicate':
+			raise EntityExists
 	return group
 
-def add_group_rule(group=None):
-	response = ec2_client.authorize_security_group_ingress(DryRun=True,
-															GroupName='ECS_Group',
-															#SourceSecurityGroupName
-															#SourceSecurityGroupOwnerId
-															#IpProtocol
-															#FromPort
-															#ToPort
-															#CidrIp
-															IpPermissions={
-																			#'IpProtocol'
-																			#FromPort
-																			#ToPort
-																			#UserIdGroupPairs
-															}
-															)
+def add_group_rule(group, dry_run=False, **kwargs):
+	api_args = {
+				'DryRun': dry_run,
+				'GroupName': group,
+	}
+	api_args.update(kwargs)
+	args = filter_args(api_args)
+	response = ec2_client.authorize_security_group_ingress(**args)
 	return response
 
-def _create_instance_profile(name=None, path=None):
+def create_instance_profile(name=None, path=None):
 	try:
 		profile = iam_client.create_instance_profile(InstanceProfileName=name)
 	except ClientError as e:
@@ -41,20 +51,27 @@ def _create_instance_profile(name=None, path=None):
 			raise EntityExists
 	return profile
 
+'''
 def create_instance_profile(**kwargs):
+	# A wrapper method for a _create_instance_profile might be good
+	# if EntityExists can be modified in that case to throw an error
+	# with the arn of the existing profile as msg. In that case,
+	# client code can catch the error and decide that returning
+	# the existing arn might just be ok. 
 	try:
 		profile = _create_instance_profile(**kwargs)
 	except EntityExists:
 		profile = None
 	return profile
+'''
 
-def list_instance_profiles():
-	profiles = iam_client.list_instance_profiles()
+def list_instance_profiles(**kwargs):
+	args = filter_args(kwargs)
+	profiles = iam_client.list_instance_profiles(**args)
 	return profiles['InstanceProfiles']
 
 def update_instance_profile():
 	pass
-
 
 def _add_role2profile(role_name=None, profile_name=None):
 	try:
@@ -69,8 +86,9 @@ def add_role2profile(**kwargs):
 	try:
 		response = _add_role2profile(**kwargs)
 	except LimitExceeded:
+		# Raise a proper error 
 		print('Instance profile already has an IAM role.')
-		response = 'Instance profile already has an IAM role.'
+		response = None
 	return response 
 
 def get_user_data(file):
@@ -118,43 +136,55 @@ def get_most_recent_opt_AMI():
 	maxim = max(images, key=lambda x: get_dt(x))
 	return maxim
 
-def launch_ec2(key_name, security_groups, user_data, profile_arn, min_count=1, max_count=1, instance_type='t2.micro', monitoring=True):
-	image_id = get_most_recent_opt_AMI()['ImageId']
-	instance = ec2_client.run_instances(#ryRun=True,
-				ImageId=image_id,
-				MinCount=1,
-				MaxCount=1,
-				KeyName='ecs_cluster',
-				#SecurityGroups=[], This is for VPCs
-				SecurityGroupIds=['testxmpp'],
-				UserData=docker_login,
-				InstanceType='t2.micro',
-				#Placement={
+def launch_ec2(key_name, 
+				security_groups, 
+				profile_arn,
+				user_data=None, 
+				dry_run=False,
+				image_id=None, 
+				min_count=1, 
+				max_count=1, 
+				instance_type='t2.micro', 
+				monitoring=True, 
+				**kwargs
+				):
+	if image_id is None:
+		image_id = get_most_recent_opt_AMI()['ImageId']
+	api_args = {
+				'DryRun': dry_run,
+				'ImageId': image_id,
+				'MinCount': min_count,
+				'MaxCount': max_count,
+				'KeyName': key_name,
+				#'SecurityGroups'=[], This is for VPCs
+				'SecurityGroupIds': security_goups,
+				'UserData': user_data,
+				'InstanceType': instance_type,
+				#'Placement'={
 					#'AvailabilityZone': 'eu-west-1',
 					#'GroupName': 'xmpp_component_cluster',
 					#'Tenancy': ,
 					#'HostId': ,
 					#'Affinity': 
 				#},
-				#KernelId='',
-				#RamdiskId,
-				#BlockDeviceMappings=[]
-				Monitoring={
-					'Enabled': True
+				'Monitoring'={
+					'Enabled': monitoring
 				},
-				#SubnetId=
-				#DisableApiTerminator
-				#InstanceInitiatedShutdownBehavior
-				#PrivateIpAddress
-				#ClientTocken
-				#AdditionalInfo
-				#NetworkInterfaces
-				IamInstanceProfile={
+				#'SubnetId'=
+				#'DisableApiTerminator'
+				#'InstanceInitiatedShutdownBehavior'
+				#'PrivateIpAddress'
+				#'ClientTocken'
+				#'NetworkInterfaces'
+				'IamInstanceProfile'={
 					'Arn': 'arn:aws:iam::876701361933:instance-profile/ec2InstanceProfileECS'
 					#'Name': 'XMPP-instance-profile'
 				},
 				#EbsOptimized
-				)
+	}
+	api_args.update(kwargs)
+	args = filter_args(api_args)
+	instance = ec2_client.run_instances(args)
 	return instance
 
 def list_ec2():
@@ -172,6 +202,17 @@ def stop_instances(instances):
 def terminate_instances(instances):
 	response = ec2_client.terminate_instances(InstanceIds=instances)
 	return response 
+
+
+
+#key = create_key_pair('xmpp')
+#print(key)
+
+#group = create_security_group('a_group', 'a_group')
+#print(group) 
+
+#profiles = list_instance_profiles()
+#print(profiles)
 
 #ec2s = list_ec2()
 #for ec2 in ec2s:
