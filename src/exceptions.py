@@ -3,3 +3,6 @@ class EntityExists(Exception):
 
 class LimitExceeded(Exception):
 	pass 
+
+class DoesNotExist(Exception):
+	pass 
