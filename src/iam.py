@@ -6,6 +6,8 @@ from botocore.exceptions import ClientError
 
 from exceptions import EntityExists
 
+from core_utils import filter_args
+
 
 iam_client = boto3.client('iam')
 iam_resource = boto3.resource('iam')
@@ -44,10 +46,6 @@ def _get_role_arn_from_create_request(request):
 def _get_role_arn(role_name):
 	arn = iam_client.get_role(RoleName=role_name)
 	return arn['Role']['Arn']
-
-#request = {'Role': {'AssumeRolePolicyDocument': {'Version': '2012-10-17', 'Statement': [{'Action': 'sts:AssumeRole', 'Effect': 'Allow', 'Principal': {'Service': 'lambda.amazonaws.com'}, 'Sid': ''}]}, 'RoleName': 'lambda_ecs_role_test', 'CreateDate': datetime.datetime(2016, 9, 6, 9, 0, 48, 309000), 'Arn': 'arn:aws:iam::876701361933:role/lambda_ecs_role_test', 'Path': '/', 'RoleId': 'AROAJHW24XF6JJBQA6WPQ'}, 'ResponseMetadata': {'HTTPStatusCode': 200, 'RequestId': '674c4859-7410-11e6-bf4f-7b2766e599ec'}}
-#arn = _get_role_arn_from_request(request)
-#print(arn)
 
 def create_role(**kwargs):
 	try:
@@ -92,12 +90,7 @@ roles = list_roles(['xmpp'])
 for role in roles:
     print(role['RoleName'])
 
-#roles = list_roles()
-#for role in roles:
-#	print(role.keys())
-#	print(role['RoleName'], role['Arn'], role['AssumeRolePolicyDocument'])
-
-def attach_policy(role_name=None, policy_arn=None):
+def attach_policy(role_name, policy_arn):
 	response = iam_client.attach_role_policy(RoleName=role_name,
 							PolicyArn=policy_arn)
 	return response
@@ -113,9 +106,6 @@ def _list_all_policies():
 	policies = iam_client.list_policies()
 	return policies['Policies']	
 
-policies = list_policies(['ecs'])
-for policy in policies:
-	print(policy['PolicyName'])
 
 def get_role_attached_policies(role_name):
 	policies = iam_client.list_attached_role_policies(RoleName=role_name)
@@ -136,11 +126,6 @@ def document_has_permission(document, permission):
 def documents_have_permission(documents, permission):
 	return any(document_has_permission(document, permission) for document in documents)
 
-#document = {'Statement': [{'Action': ['logs:*'], 'Effect': 'Allow', 'Resource': 'arn:aws:logs:*:*:*'}, {'Action': ['ecs:DescribeServices', 'ecs:UpdateService'], 'Effect': 'Allow', 'Resource': ['*']}], 'Version': '2012-10-17'}
-#permission = 'ecs:DescribeServices'
-
-#print(document_has_permission(document, permission)) -> True
-
 def role_has_permissions(role_name, permissions):
 	'''
 	:type permissions: list(string)
@@ -156,6 +141,25 @@ def role_has_permissions(role_name, permissions):
 
 def roles_have_permissions(roles, permissions):
 	return filter(role_has_permissions(role, permissions) for role in roles)
+
+
+#request = {'Role': {'AssumeRolePolicyDocument': {'Version': '2012-10-17', 'Statement': [{'Action': 'sts:AssumeRole', 'Effect': 'Allow', 'Principal': {'Service': 'lambda.amazonaws.com'}, 'Sid': ''}]}, 'RoleName': 'lambda_ecs_role_test', 'CreateDate': datetime.datetime(2016, 9, 6, 9, 0, 48, 309000), 'Arn': 'arn:aws:iam::876701361933:role/lambda_ecs_role_test', 'Path': '/', 'RoleId': 'AROAJHW24XF6JJBQA6WPQ'}, 'ResponseMetadata': {'HTTPStatusCode': 200, 'RequestId': '674c4859-7410-11e6-bf4f-7b2766e599ec'}}
+#arn = _get_role_arn_from_request(request)
+#print(arn)
+
+#roles = list_roles()
+#for role in roles:
+#	print(role.keys())
+#	print(role['RoleName'], role['Arn'], role['AssumeRolePolicyDocument'])
+
+#policies = list_policies(['ecs'])
+#for policy in policies:
+#	print(policy['PolicyName'])
+
+#document = {'Statement': [{'Action': ['logs:*'], 'Effect': 'Allow', 'Resource': 'arn:aws:logs:*:*:*'}, {'Action': ['ecs:DescribeServices', 'ecs:UpdateService'], 'Effect': 'Allow', 'Resource': ['*']}], 'Version': '2012-10-17'}
+#permission = 'ecs:DescribeServices'
+
+#print(document_has_permission(document, permission)) -> True
 
 #description = describe_policy(policy_arn)
 #print(description) 
