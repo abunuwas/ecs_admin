@@ -1,7 +1,9 @@
 import boto3
 lambda_client = boto3.client('lambda')
-from iam import list_roles
+#from iam import list_roles
 
+class Lambda:
+    pass 
 
 def create_zip(file):
     zip_file = None
