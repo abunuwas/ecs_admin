@@ -1,8 +1,14 @@
-class EntityExists(Exception):
-	pass 
+class EntityExistsError(Exception):
+	""
 
-class LimitExceeded(Exception):
-	pass 
+class LimitExceededError(Exception):
+	""
 
-class DoesNotExist(Exception):
-	pass 
+class DoesNotExistError(Exception):
+	""
+
+class MissingValueError(Exception):
+	"An exceptionp"
+
+class InvalidOperationError(Exception):
+	""
