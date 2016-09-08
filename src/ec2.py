@@ -2,27 +2,20 @@ import boto3
 
 from botocore.exceptions import ClientError
 
-from exceptions import EntityExists, LimitExceeded, DoesNotExist
+from exceptions import EntityExistsError, LimitExceededError, DoesNotExistError, MissingValueError
 from core_utils import filter_args
 
 
-class EC2:
-	def __init__(self, security_group=None, instance_type=None, image_id=None, key_name=None, vpn=None, profile=None, aws_parameters=None):
-		self.security_group = security_group
-		self.instance_type = instance_type
-		self.image_id = image_id
-		self.key_name = key_name
-		self.vpn = vpn
-		self.profile = profile
-		self.instance_id = None
-		self.aws_parameters = aws_parameters
+class EC2Client:
+	def __init__(self, aws_parameters=None):
 		self._make_clients()
+		self._missing_value_msg = 'Please make sure you have set a value for {value}.'
 
 	def _make_clients(self):
 		if self.aws_parameters is not None:
-			self.iam_client = boto3.client('iam', **aws_parameters)
-			self.ec2_client = boto3.client('ec2', **aws_parameters)
-			self.ec2_resource = boto3.resource('ec2', **aws_parameters)
+			self.iam_client = boto3.client('iam', **self.aws_parameters)
+			self.ec2_client = boto3.client('ec2', **self.aws_parameters)
+			self.ec2_resource = boto3.resource('ec2', **self.aws_parameters)
 		else:
 			try:
 				self.iam_client = boto3.client('iam')
@@ -32,33 +25,42 @@ class EC2:
 				print(str(e))
 		return None 
 
-	def create_key_pair(self, key_name, output=None):
+	def _create_key_pair(self, **kwargs):
 		try: 
-			self.key_pair = ec2_client.create_key_pair(KeyName=key_name)
-			if output is None:
-				return self.key_pair['KeyMaterial']
-			else:
-				with open(output) as file:
-					## Handle possible file errors
-					## chmod 400
-					file.write(self.key_pair['KeyMaterial'])
-				return None
+			return self.ec2_client.create_key_pair(KeyName=kwargs['key_name'])
 		except ClientError as e:
 			if e.response['Error']['Code'] == 'InvalidKeyPair.Duplicate':
-				raise EntityExists
+				raise EntityExistsError('A key pair already exists with name: {}.'.format(kwargs['key_name']))
 
-	def create_security_group(self, name, description, dry_run=False):
+	def create_key_pair(self, key_name, output=None, **kwargs):
+		key = self._create_key_pair(key_name=key_name, **kwargs)
+		if output is None:
+			return key['KeyMaterial']
+		else:
+			with open(output) as file:
+				## Handle possible file errors
+				## chmod 400
+				file.write(self.key_pair['KeyMaterial'])
+			return None		
+
+	def _create_security_group(self, name, description, dry_run=False, **kwargs):
 		api_args = {
 					'DryRun': dry_run,
 					'GroupName': name,
 					'Description': description
 					}
+		api_args.update(kwargs)
+		args = filter_args(api_args)
 		try:
-			self.security_group = self.ec2_client.create_security_group(**api_args)
+			security_group = self.ec2_client.create_security_group(**args)
 		except ClientError as e:
 			if e['Error']['Code'] == 'InvalidGroup.Duplicate':
-				raise EntityExists
-		return self.security_group
+				msg = 'A security group already exists with name: {}.'.format(name)
+				raise EntityExistsError(msg)
+		return security_group
+
+	def create_security_group(self, name, description, dry_run=False, **kwargs):
+		return self._create_security_group(name=name, description=description, dry_run=dry_run, **kwargs)
 
 	def add_group_rule(self, group, dry_run=False, **kwargs):
 		api_args = {
@@ -74,39 +76,17 @@ class EC2:
 		api_args = { 'InstanceProfileName': name, 'Path': path }
 		args = filter_args(api_args)
 		try:
-			self.profile = self.iam_client.create_instance_profile(**args)
+			profile = self.iam_client.create_instance_profile(**args)
 		except ClientError as e:
 			if e.response['Error']['Code'] == 'EntityAlreadyExists':
-				raise EntityExists
+				msg = 'A profile instance already exists with name: {}'.format(name)
+				raise EntityExistsError(msg)
 			else:
 				print(str(e))
-		return self.profile['InstanceProfile']['Arn']
+		return profile
 
 	def create_instance_profile(self, **kwargs):
-		try:
-			self.profile = self._create_instance_profile(**kwargs)
-			return self.profile
-		except EntityExists:
-			'''
-			If the instance profile already exists, return None.
-			'''
-			## Change print() for log()
-			print('Profile already exists.')
-
-	def _get_instance_profile(self, name):
-		try: 
-			self.profile = self.iam_client.get_instance_profile(InstanceProfileName=name)
-		except ClientError as e:
-			if e.response['Error']['Code'] == 'NoSuchEntity':
-				raise DoesNotExist
-		return self.profile['InstanceProfile']['Arn']
-
-	def get_instance_profile(self, **kwargs):
-		try:
-			self.profile = self._create_instance_profile(**kwargs)
-		except EntityExists:
-			self.profile = self._get_instance_profile(kwargs['name']) 
-		return self.profile 
+		return self._create_instance_profile(**kwargs)['InstanceProfile']['Arn']
 
 	def list_instance_profiles(self, **kwargs):
 		args = filter_args(kwargs)
@@ -123,19 +103,19 @@ class EC2:
 			return response
 		except ClientError as e:
 			if e.response['Error']['Code'] == 'LimitExceeded':
-				raise LimitExceeded
+				msg = '''
+					  Instance profile {} already has a role. You cannot attach more 
+					  than one role to an instance profile.
+					  '''.format(profile_name)
+				raise EntityExistsError(msg)
 
-	def add_role2profile(self, **kwargs):
-		try:
-			response = self._add_role2profile(**kwargs)
-		except LimitExceeded:
-			# Raise a proper error 
-			print('Instance profile already has an IAM role.')
-			response = None
-		return response 
+	def add_role2profile(self, role_name, profile_name):
+		return self._add_role2profile(role_name=role_name, profile_name=profile_name)
 
 	def get_user_data(self, file):
-		return open(file).read()
+		with open(file) as file:
+			data = file.read()
+			return data
 
 	def find_images(self, filters=None, **kwargs):
 		if filters is None:
@@ -160,7 +140,7 @@ class EC2:
 		api_args = { 'Filters': filteres }
 		api_args.update(kwargs)
 		args = filter_args(api_args)
-		images = self.ec2_client.describe_images(args)
+		images = self.ec2_client.describe_images(**args)
 		return images
 
 	def _iso2map(self, iso):
@@ -226,27 +206,15 @@ class EC2:
 					#'ClientTocken'
 					#'NetworkInterfaces'
 					'IamInstanceProfile': {
-						'Arn': 'arn:aws:iam::876701361933:instance-profile/ec2InstanceProfileECS'
+						'Arn': profile_arn
 						#'Name': 'XMPP-instance-profile'
 					},
 					#EbsOptimized
 		}
 		api_args.update(kwargs)
 		args = filter_args(api_args)
-		instance = self.ec2_client.run_instances(args)
+		instance = self.ec2_client.run_instances(**args)
 		return instance
-
-	def launch_ec2(self, **kwargs):
-		params = { 'key_name': self.key_name, 'security_group': self.security_group, 'profile': self.profile }
-		if all(param is not None for param in params.values()):
-			instance = self.launch_ec2s(key_name=self.key_name, security_goups=self.security_groups, profile_arn=self.profile)
-			self.instance_id = instance['Instances']['InstanceId']
-			return instance 
-		else:
-			missing_params = filter(lambda param: param[1] is None, params.items())
-			print(list(missing_params))
-			print('Please make sure you have assigned valid values for the following parameters: {}.'.format(', '.join(list(missing_params))))
-			return None 
 
 	def list_ec2(self):
 		ec2s = self.ec2_resource.instances.all()
@@ -263,9 +231,6 @@ class EC2:
 		description = self.ec2_client.describe_instances(args)
 		return description['Reservations']
 
-	def describe_ec2(self):
-		return self.describe_ec2s(ec2=self.instance_id)
-
 	def stop_instances(self, instances):
 		response = self.ec2_client.stop_instances(InstanceIds=instances)
 		return response 
@@ -274,17 +239,164 @@ class EC2:
 		response = self.ec2_client.terminate_instances(InstanceIds=instances)
 		return response 
 
-ec2 = EC2()
+
+class EC2Instance(EC2Client):
+	def __init__(self, 
+				 security_group, 
+				 key_name, 
+				 profile_name, 
+				 profile_path=None,
+				 profile_role=None,
+				 vpn=None, 
+				 aws_parameters=None, 
+				 security_group_description=None, 
+				 key_output=None,
+				 user_data_file=None
+				 ):
+		EC2Client.__init__(self, aws_parameters=aws_parameters)
+		self._make_clients() 
+
+		self.security_group = security_group
+		self.security_group_description = security_group_description
+
+		self.key_name = key_name
+		self.key_output = key_output
+
+		self.vpn = vpn
+
+		self.profile_name = profile_name
+		self.profile_path = profile_path
+		self.profile_role = profile_role
+
+		self.user_data_file = user_data_file
+
+		self._missing_value_msg = 'Please make sure you have set a value for {value}.'
+
+	def _make_clients(self):
+		self.iam_client = boto3.client('iam')
+		self.ec2_client = boto3.client('ec2')
+		self.ec2_resource = boto3.resource('ec2')
+
+	def get_ready(self):
+		# Make sure you provie a key_output value
+		# Make sure you create a profile_role with
+		# the IAM client. 
+		self.get_security_group()
+		self.get_key_pair()
+		self.profile_arn = self.get_instance_profile()
+		self.add_role2profile(self.profile_role, self.profile_name)
+		self.user_data_file = get_user_data()
+		self.launch()
+
+
+	def get_key_pair(self, **kwargs):
+		if self.key_name is None:
+			msg = self._missing_value_msg.format(value='self.key_name')
+			raise MissingValueError(msg)
+		try:
+			key = self.create_key_pair(self.key_name, self.key_output)
+		except EntityExistsError:
+			# Key already exists, so nothing has to be done. Object's
+			# key_name attribute can be kept as it is. 
+			pass
+		return self.key_name
+
+	def get_security_group(self, dry_run=False, **kwargs):
+		if self.security_group is None:
+			msg = self._missing_value_msg.format(value='self.security_group')
+			raise MissingValueError(msg)
+		try:
+			## This assignment might be wrong. Test by launching an instance with a new security group. 
+			## If it raises an error, it means what we need is the group name, not the group id as returned
+			## by the API call. 
+			if self.security_group_description is None:
+				msg = self._missing_value_msg.format(value='self.security_group_description')
+				raise MissingValueError(msg)
+			group = self.list_security_groups([self.security_group])
+		except DoesNotExistError:
+			self.create_security_group(name=self.security_group, description=self.security_group_description, dry_run=dry_run, **kwargs)
+		return self.security_group
+
+	def _list_security_groups(self, names, **kwargs):
+		api_args = { 'GroupNames': names }
+		api_args.update(kwargs)
+		args = filter_args(api_args)
+		try:
+			groups = self.ec2_client.describe_security_groups(**args)
+		except ClientError as e:
+			if e.response['Error']['Code'] == 'InvalidGroup.NotFound':
+				msg = 'The following security groups do not exist: {}'.format(', '.join(names))
+				raise DoesNotExistError(msg)
+		return groups
+
+	def list_security_groups(self, names, **kwargs):
+		return self._list_security_groups(names, **kwargs)['SecurityGroups']
+
+	def _get_instance_profile(self, **kwargs):
+		api_args = { 'InstanceProfileName': kwargs['name'], 'Path': kwargs['path'] }
+		args = filter_args(api_args)
+		try: 
+			profile = self.iam_client.get_instance_profile(**args)
+		except ClientError as e:
+			if e.response['Error']['Code'] == 'NoSuchEntity':
+				msg = 'No profile instance could be found with name: {}'.format(kwargs['name'])
+				raise DoesNotExistError(msg)
+		return profile
+
+	def get_instance_profile(self, **kwargs):		
+		if self.profile_name is None:
+			msg = self._missing_value_msg.format(value='self.profile_name')
+			raise MissingValueError(msg)
+		try:
+			self.profile_arn = self.create_instance_profile(name=self.profile_name, path=self.profile_path, **kwargs)
+		except EntityExistsError:
+			self.profile_arn = self._get_instance_profile(name=self.profile_name, path=self.profile_path)['InstanceProfile']['Arn'] 
+		return self.profile_arn 
+
+	def _launch(self, key_name, security_group, profile, **kwargs):
+		'''
+		Low level method which returns all the metadata coming with the response to the AWS API call 
+		ec2_client.call to run_instances. To set the class instance attribute self.instance_id at 
+		launch time, call the equivalent high level method, self.launch_ec2. 
+		'''
+		missing_params = list(filter(lambda param: param is None, [key_name, security_group, profile]))
+		if len(missing_params) > 0:
+			msg = 'The following values need to be set: {}'.format(', '.join(missing_params.split()))
+			raise MissingValueError(msg)
+		instance = launch_ec2s(self, key_name=key_name, security_goup=security_goup, profile=profile, **kwargs)
+		return instance
+
+	def launch(self, **kwargs):
+		instance = _launch(self, key_name=self.key_name, security_group=self.security_group, profile=self.profile_arn, **kwargs)
+		self.instance_id = instance['Instances'][0]['InstanceId']
+		return self.instance_id
+
+	def describe(self):
+		if not hasattr(instance_id):
+			raise Exception('Please launch an EC2 instance before attempting to describe.')
+		return self.describe_ec2s(ec2=self.instance_id)
+
+	def stop(self):
+		return self.stop_instances(self.instance_id)
+
+	def terminate(self):
+		return self.terminate_instances(self.instance_id)
+
+
+#ec2 = EC2Instance() -> TypeError: __init__() missing 3 required positional arguments: 'security_group', 'key_name', and 'profile_name'
+#ec2 = EC2Instance('sgxmpp', 'keyxmpp', 'profilexmpp')
+#ec2.security_group_description = 'a description'
+#ec2.get_ready() # At this point only profile_role is missing -> Invalid type for parameter RoleName, value: None, type: <class 'NoneType'>, valid types: <class 'str'>
 #profile = ec2.create_instance_profile(name='xmpp22')
 #print(profile) -> if exists, None.
 #user_data = ec2.get_user_data('docker-login.txt')
 #print(user_data) -> prints the file correctly
 
-profile = ec2.get_instance_profile(name='mueje', path='/marara/')
-print(profile)
-print(ec2.profile)
-instance = ec2.launch_ec2()
-print(instance)
+#profile = ec2.get_instance_profile(name='mueje', path='/marara/')
+#print(profile)
+#print(ec2.profile)
+#instance = ec2.launch_ec2()
+#print(instance)
 
 #key = create_key_pair('xmpp')
 #print(key)
