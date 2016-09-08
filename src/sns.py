@@ -1,6 +1,8 @@
 import boto3
 sns_client = boto3.client('sns')
 
+class SNS:
+	pass 
 
 def create_sns_topic(name=None):
 	topic = sns_client.create_topic(Name=name)
