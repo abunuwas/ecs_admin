@@ -1,0 +1,49 @@
+
+LOW LEVEL methods perform api_args validation and filtering. 
+
+--------------------------------------------------------------------------
+CREATE: can be applied to multiple values, only returns value, doesn't
+		modify the object's attributes. We don't store the values, because
+		if someone were to make a million calls, we'd run out of resources. 
+--------------------------------------------------------------------------
+LOW LEVEL: only accepts kwrags
+------------------------------
+_create_resource -> wraps API call and raises appropriate exceptions; 
+					returns complete response from API call. 
+
+HIGH LEVEL: args + kwargs 
+-------------------------
+create_resource -> calls _create_resource passing **kwargs; only returns
+				   the value that we need from the API call. 
+
+
+
+=========================================================================
++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+=========================================================================
+
+
+
+--------------------------------------------------------------------------
+GET: can be applied to multiple values, but it's really meant to
+	 be called only once to set the value of the object. get function
+	 calls are invoked on the object attributes. 
+--------------------------------------------------------------------------
+LOW LEVEL
+---------
+_get_resource -> wraps API call to get the needed value from a resource
+				 and returns the appropriate exceptions. 
+
+HIGH LEVEL 
+----------
+get_resource -> tries to create the resource by calling create_resource with 
+				**kwargs. 
+			 -> if entity exists, catches the exception . 
+			 		-> if needed, it calls _get_resource to obtain the value
+			 		   that needs to be returned, e.g. an arn. 
+			 -> returns appropriate value
+
+
+
+
+
