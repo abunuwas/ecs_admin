@@ -8,6 +8,7 @@ from core_utils import filter_args
 
 class EC2Client:
 	def __init__(self, aws_parameters=None):
+		self.aws_parameters = aws_parameters
 		self._make_clients()
 		self._missing_value_msg = 'Please make sure you have set a value for {value}.'
 
