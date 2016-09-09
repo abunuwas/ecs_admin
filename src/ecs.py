@@ -1,11 +1,13 @@
 import os
 import uuid
+import time
 
 import boto3
 from botocore.exceptions import ClientError
 
+from ec2 import EC2Client
 from core_utils import filter_args
-from exceptions import InvalidOperationError
+from exceptions import InvalidOperationError, DoesNotExistError
 
 class ECS:
 	"""
@@ -14,6 +16,8 @@ class ECS:
 	def __init__(self, aws_parameters=None):
 		self.aws_parameters = aws_parameters
 		self._make_clients()
+
+		ec2_client = EC2Client()
 
 
 	def _make_clients(self):
@@ -28,7 +32,7 @@ class ECS:
 
 	def create_cluster(self, name=None):
 		cluster = self.ecs_client.create_cluster(clusterName=name)
-		return cluster
+		return cluster['cluster']
 
 	def list_clusters(self):
 		clusters = self.ecs_client.list_clusters()
@@ -76,23 +80,25 @@ class ECS:
 		response = self.ecs_client.delete_cluster(cluster=cluster)
 		return response
 
-	def create_service(self, cluster, service_name, task_definition, desired_count=1, max_health=150, min_health=50):
+	def create_service(self, cluster, service_name, task_definition, desired_count=1, max_health=None, min_health=None, **kwargs):
+		api_args = {
+						'cluster': cluster,
+						'serviceName': service_name,
+						'taskDefinition': task_definition,
+						'desiredCount': desired_count,
+						'clientToken': str(uuid.uuid3(uuid.NAMESPACE_DNS, cluster)),
+						'deploymentConfiguration': {
+							'maximumPercent': max_health,
+							'minimumHealthyPercent': min_health
+						}
+		}
+		api_args.update(kwargs)
+		args = filter_args(api_args)
 		try:
-			service = self.ecs_client.create_service(
-				cluster=cluster,
-				serviceName=service_name,
-				taskDefinition=task_definition,
-				desiredCount=desired_count,
-				#role='arn:aws:iam::876701361933:role/ec2InstanceRole', # 'ecs_role' | 'ecs_xmpp_component_role'
-				clientToken=str(uuid.uuid3(uuid.NAMESPACE_DNS, cluster)),
-				deploymentConfiguration={
-					'maximumPercent': max_health,
-					'minimumHealthyPercent': min_health
-					}
-				)
-			return service
+			service = self.ecs_client.create_service(**args)
+			return service['service']
 		except ClientError as e:
-			return e
+			return str(e)
 
 	def list_services(self, cluster):
 		services = self.ecs_client.list_services(cluster=cluster)
@@ -101,14 +107,20 @@ class ECS:
 	def _describe_services(self, cluster):
 		#services = [service.split('/')[1] for service in list_services(cluster)]
 		try:
-			services = self.list_services(cluster)
+			services = self.list_services(cluster=cluster)
 			descriptions = self.ecs_client.describe_services(cluster=cluster, services=services)
 			return descriptions['services']
 		except ClientError as e:
 			if e.response['Error']['Code'] == 'ClusterNotFoundException':
-				
+				raise DoesNotExistError("Cluster {} does not exist. No services to describe.".format(cluster))
 
-	def update_service(self, cluster=None, service=None, desired_count=1, task_definition=None, deployment_conf=None):
+	def describe_services(self, cluster):
+		try:
+			return self._describe_services(cluster)
+		except DoesNotExistError:
+			return []
+
+	def update_service(self, cluster, service, desired_count=1, task_definition=None, deployment_conf=None):
 		service = self.ecs_client.update_service(cluster=cluster,
 											service=service,
 											desiredCount=desired_count
@@ -116,18 +128,21 @@ class ECS:
 											)
 		return service
 
-	def set_count_services_zero(self, cluster=None, services=None):
+	def set_count_services_zero(self, cluster, services):
 		for service in services:
-			update_service(self, cluster=cluster, service=service, desired_count=0, task_definition=None, deployment_conf=None)
+			self.update_service(cluster=cluster, service=service, desired_count=0, task_definition=None, deployment_conf=None)
 		return None
 
-	def delete_service(self, cluster=None, service=None):
+	def delete_service(self, cluster, service):
 		response = self.ecs_client.delete_service(cluster=cluster, service=service)
 		return response 
 
-	def delete_services(self, cluster=None, services=None):
+	def delete_services(self, cluster, services):
 		for service in services:
-			delete_service(cluster, service)
+			self.delete_service(cluster, service)
+
+	def stop_instances(self, instances):
+		return ec2_client.stop_instances(instances=instances)
 
 	def define_container(self, 
 						 image, 
@@ -178,6 +193,7 @@ class ECS:
 			containerDefinitions=containers
 			#volumes=[]
 			)
+		return task_definition['taskDefinition']
 
 	def list_task_definitions(self, family=None):
 		tasks = self.ecs_client.list_task_definitions(familyPrefix=family)['taskDefinitionArns']
@@ -196,7 +212,7 @@ class ECS:
 		return tasks['taskArns']
 
 	def describe_tasks(self, cluster):
-		tasks = list_tasks(cluster)
+		tasks = self.list_tasks(cluster)
 		descriptions = None
 		try:
 			descriptions = self.ecs_client.describe_tasks(cluster=cluster, tasks=tasks)
@@ -205,39 +221,39 @@ class ECS:
 		finally: 
 			return descriptions
 
-	def stop_task(self, cluster=None, task=None):
+	def stop_task(self, cluster, task):
 		response = self.ecs_client.stop_task(cluster=cluster, task=task)
 		return response 
 
 	def stop_tasks(self, cluster):
-		tasks = list_tasks(cluster)
+		tasks = self.list_tasks(cluster)
 		for task in tasks:
 			stop_task(cluster, task)
 		return None
 
 	def clearup_cluster(self, cluster):
 		# Still lacking functionality to remove associated metrics, alarms, lambdas, and sns topics
-		services = list_services(cluster)
-		set_count_services_zero(cluster, services)
+		services = self.list_services(cluster)
+		self.set_count_services_zero(cluster, services)
 		print('Number of desired tasks set to 0.')
 		time.sleep(2)
-		stop_tasks(cluster)
+		self.stop_tasks(cluster)
 		print('Stopped running tasks.')
 		time.sleep(2)
-		tasks = list_tasks(cluster)
+		tasks = self.list_tasks(cluster)
 		for task in tasks:
-			deregister_task_def(task)
+			self.deregister_task_def(task)
 		print('Deregistered all active tasks in the cluster.')
 		time.sleep(1)
-		delete_services(cluster, services)
+		self.delete_services(cluster, services)
 		print('Deleted all services registered with the cluster.')
 		time.sleep(1)
-		cluster_instances = list(list_instances(cluster))
-		deregister_instances(cluster, cluster_instances)
+		cluster_instances = list(self.list_instances(cluster))
+		self.deregister_instances(cluster, cluster_instances)
 		print('Deregistered all container instances within the cluster.')
 		time.sleep(1)
 		try:
-			stop_instances(cluster_instances)
+			self.stop_instances(cluster_instances)
 			print('Stopped container instances in the cluster.')
 			time.sleep(5)
 		except ClientError:
@@ -248,7 +264,7 @@ class ECS:
 			time.sleep(5)
 		except ClientError:
 			print('No running instance within the cluster found, no instance to terminate.')
-		response = delete_cluster(cluster)
+		response = self.delete_cluster(cluster)
 		print('Deleted cluster {}.'.format(cluster))
 		return response 
 
