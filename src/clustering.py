@@ -6,7 +6,8 @@ from iam import IAM
 from sns import SNS
 from lambda_func import Lambda
 from core_utils import filter_args
-#from exceptions import EntityExistsError, LimitExceededError, DoesNotExistError, MissingValueError, InvalidOPerationError
+from exceptions import MissingValueError #EntityExistsError, LimitExceededError, DoesNotExistError, InvalidOPerationError
+from policies import ec2_trust_policy, ecs_role_policy
 
 class Cluster(ECS):
 	"""
@@ -15,6 +16,7 @@ class Cluster(ECS):
 	def __init__(self, 
 				 app_name, 
 				 image, 
+				 user_data_file,
 				 task_definition=None,
 				 service=None,
 				 desired_count=1, 
@@ -23,12 +25,31 @@ class Cluster(ECS):
 				 container_definitions=None,
 				 key_name=None,
 				 security_groups=None,
-				 user_data_file=None,
 				 user_data=None,
 				 lambda_role=None, 
 				 aws_parameters=None
 				 ):
 		'''
+
+		:type user_data_file: string
+		:param user_data_file: path a .txt file containing bash
+			commands to be executed on an EC2 instance at launch
+			time. At least, the commands must set the following 
+			parameters: 
+
+			`ECS_CLUSTER` 
+
+			and
+
+			{"auths": 
+				{
+					`dkr.ecr.region.awsamazon.com`: { "auth": `auth_tocken` }
+					"https://index.docker.io/v1/": { "auth": `auth_token` }
+				}
+
+			must be set in the following file: /etc/ecs/ecs.config in the 
+			EC2 instance. See the AWS documentation for further information:
+			##############################URL. 
 
 		:type max_health: int
 		:param max_health: maximumPercent for the deployment 
@@ -78,12 +99,16 @@ class Cluster(ECS):
 		self.user_data_file = user_data_file
 		self.user_data = user_data
 		self.security_groups = security_groups
+		self._instances = []
 
 		self.lambda_role = lambda_role
 		#self.default_lambda_role = 'lambda_ecs_role'
 
 		self.aws_parameters = aws_parameters
 		self._make_clients()
+
+		## Allow passing aws connection parameters to get
+		## the connections. 
 		self.ec2 = EC2Instance(None, None, None)
 		self.iam = IAM()
 		self.sns = SNS()
@@ -94,8 +119,11 @@ class Cluster(ECS):
 	@property
 	def cluster(self):
 		return self._cluster
-	
 
+	@property
+	def instances(self):
+		return self._instances
+	
 	def _make_clients(self):
 		if self.aws_parameters is not None:
 			self.ecs_client = boto3.client('ecs', **self.aws_parameters)
@@ -107,11 +135,10 @@ class Cluster(ECS):
 		return None 
 
 	def get_ready(self):
-		cluster = self.create_cluster()
-		self.define_container()
-		self.create_task_definition()
-		self.create_service()
-		self.user_data = ec2.get_user_data(self.user_data_file)
+		if self.container_definitions == []:
+			self.define_container()
+		self.user_data = self.ec2.get_user_data(self.user_data_file)
+		self.ec2.get_ready()
 
 	def create(self):
 		#lambda_role = lambda_ecs
@@ -119,8 +146,16 @@ class Cluster(ECS):
 		#task_role = self.create_role(path=self.app_name,
 		#						role_name=self.task_name,
 		#						policy_trust=task_role_policy)
-
-		profile = default_ec2_instance_profile()
+		if container is None:
+			msg = '''Please define a container to run within the cluster.
+					 You can run the Cluster.get_ready() method to obtain
+					 a default definition. 
+				  '''
+			raise MissingValueError(msg)
+		cluster = self.create_cluster()
+		self.create_task_definition()
+		self.create_service()
+		self.profile = default_ec2_instance_profile()
 
 		return profile 
 
@@ -168,7 +203,7 @@ class Cluster(ECS):
 									 min_health=self.min_health,
 									 **kwargs
 									 )
-		self.service = service['serviceArn']
+		self.service = service
 		return self.service
 
 	def list_services(self, *args, **kwargs):
@@ -210,11 +245,14 @@ class Cluster(ECS):
 	def default_ec2_instance_profile(self):
 		ecs_instance_role = create_role(role_name='ec2InstanceRole', policy_trust=ec2_trust_policy)
 		ecs_policy = create_policy(policy_name='ecs_role_policy', policy_document=ecs_role_policy)
-		attach_policy(role_name='ec2InstanceRole', policy_arn=ecs_policy)
+		iam.attach_policy(role_name='ec2InstanceRole', policy_arn=ecs_policy)
 		profile = create_instance_profile(name='ec2InstanceProfileECS')
-		response = add_role2profile(role_name='ec2InstanceRole',
+		response = ec2.add_role2profile(role_name='ec2InstanceRole',
 									profile_name='ec2InstanceProfileECS')
 		return profile
+
+	def get_default_security_group(self):
+		pass
 
 	def default_ecs_lambda_role(self):
 		#lambda_role = iam_client.create_role(role_name='lambda_ecs_role', policy_trust=task_role_policy)
@@ -287,7 +325,7 @@ class Cluster(ECS):
 
 cluster_name = 'xmpp_component'
 
-cluster = Cluster(app_name=cluster_name, image='abunuwas/xmpp-component:v.0.0.1')
+cluster = Cluster(app_name=cluster_name, image='abunuwas/xmpp-component:v.0.0.1', user_data_file='docker-login.txt')
 cluster.get_ready()
 
 #instance = launch_ec2(key_name=key_name, security_groups=security_groups, user_data=, profile_arn=user_data)
@@ -342,14 +380,14 @@ cluster.get_ready()
 # -> {'volumes': [], 'requiresAttributes': [{'name': 'com.amazonaws.ecs.capability.ecr-auth'}], 'revision': 1, 'status': 'ACTIVE', 'containerDefinitions': [{'portMappings': [{'protocol': 'tcp', 'containerPort': 8080, 'hostPort': 9090}], 'essential': True, 'command': [], 'environment': [], 'cpu': 10, 'links': [], 'name': 'sample-app', 'memory': 300, 'mountPoints': [], 'image': '876701361933.dkr.ecr.eu-west-1.amazonaws.com/abunuwas/python_app:latest', 'volumesFrom': [], 'entryPoint': []}], 'taskDefinitionArn': 'arn:aws:ecs:eu-west-1:876701361933:task-definition/console-sample-app-static:1', 'family': 'console-sample-app-static'}
 
 services_description = cluster.describe_services()
-#print(services_description)
+print(services_description)
 # -> [{'deployments': [{'createdAt': datetime.datetime(2016, 9, 6, 15, 45, 16, 690000, tzinfo=tzlocal()), 'runningCount': 0, 'desiredCount': 1, 'updatedAt': datetime.datetime(2016, 9, 6, 15, 45, 16, 690000, tzinfo=tzlocal()), 'taskDefinition': 'arn:aws:ecs:eu-west-1:876701361933:task-definition/xmpp_component:7', 'status': 'PRIMARY', 'id': 'ecs-svc/9223370563678059106', 'pendingCount': 0}], 'runningCount': 0, 'deploymentConfiguration': {'minimumHealthyPercent': 50, 'maximumPercent': 150}, 'taskDefinition': 'arn:aws:ecs:eu-west-1:876701361933:task-definition/xmpp_component:7', 'createdAt': datetime.datetime(2016, 9, 6, 15, 45, 16, 690000, tzinfo=tzlocal()), 'events': [{'createdAt': datetime.datetime(2016, 9, 9, 3, 53, 34, 717000, tzinfo=tzlocal()), 'id': 'b140e3fb-b19a-4cff-baf4-a6a7a4589b58', 'message': '(service xmpp_component_service) was unable to place a task because no container instance met all of its requirements. Reason: No Container Instances were found in your cluster. For more information, see the Troubleshooting section of the Amazon ECS Developer Guide.'}, {'createdAt': datetime.datetime(2016, 9, 8, 21, 52, 5, 574000, tzinfo=tzlocal()), 'id': '603c509d-ddf8-4ca5-a1c7-f6d5a8f6dc47', 'message': '(service xmpp_component_service) was unable to place a task because no container instance met all of its requirements. Reason: No Container Instances were found in your cluster. For more information, see the Troubleshooting section of the Amazon ECS Developer Guide.'}, {'createdAt': datetime.datetime(2016, 9, 8, 15, 51, 24, 9000, tzinfo=tzlocal()), 'id': 'e9058d43-f508-4140-86b5-04cf5fe7bd44', 'message': '(service xmpp_component_service) was unable to place a task because no container instance met all of its requirements. Reason: No Container Instances were found in your cluster. For more information, see the Troubleshooting section of the Amazon ECS Developer Guide.'}, {'createdAt': datetime.datetime(2016, 9, 8, 9, 51, 21, 866000, tzinfo=tzlocal()), 'id': '8eb52637-b583-4f53-aea1-3e17413eb2db', 'message': '(service xmpp_component_service) was unable to place a task because no container instance met all of its requirements. Reason: No Container Instances were found in your cluster. For more information, see the Troubleshooting section of the Amazon ECS Developer Guide.'}, {'createdAt': datetime.datetime(2016, 9, 8, 3, 49, 46, 177000, tzinfo=tzlocal()), 'id': '6bb6c20a-0fcf-4e0b-87b6-15e77322013d', 'message': '(service xmpp_component_service) was unable to place a task because no container instance met all of its requirements. Reason: No Container Instances were found in your cluster. For more information, see the Troubleshooting section of the Amazon ECS Developer Guide.'}, {'createdAt': datetime.datetime(2016, 9, 7, 21, 49, 16, 550000, tzinfo=tzlocal()), 'id': '8dba18ab-4dd9-40fe-93f0-72b453e35b4c', 'message': '(service xmpp_component_service) was unable to place a task because no container instance met all of its requirements. Reason: No Container Instances were found in your cluster. For more information, see the Troubleshooting section of the Amazon ECS Developer Guide.'}, {'createdAt': datetime.datetime(2016, 9, 7, 15, 48, 42, 277000, tzinfo=tzlocal()), 'id': '137c846f-be76-4750-b376-c83eadf2387e', 'message': '(service xmpp_component_service) was unable to place a task because no container instance met all of its requirements. Reason: No Container Instances were found in your cluster. For more information, see the Troubleshooting section of the Amazon ECS Developer Guide.'}, {'createdAt': datetime.datetime(2016, 9, 7, 9, 47, 43, 926000, tzinfo=tzlocal()), 'id': '0451faea-60be-4142-ac4c-7199e8c33dca', 'message': '(service xmpp_component_service) was unable to place a task because no container instance met all of its requirements. Reason: No Container Instances were found in your cluster. For more information, see the Troubleshooting section of the Amazon ECS Developer Guide.'}, {'createdAt': datetime.datetime(2016, 9, 7, 3, 46, 25, 984000, tzinfo=tzlocal()), 'id': 'f2cd5a9e-e5e5-4777-a710-1a17481175f0', 'message': '(service xmpp_component_service) was unable to place a task because no container instance met all of its requirements. Reason: No Container Instances were found in your cluster. For more information, see the Troubleshooting section of the Amazon ECS Developer Guide.'}, {'createdAt': datetime.datetime(2016, 9, 6, 21, 45, 55, 486000, tzinfo=tzlocal()), 'id': 'aac7c71f-cfb5-4e38-9b6a-a462061ee142', 'message': '(service xmpp_component_service) was unable to place a task because no container instance met all of its requirements. Reason: No Container Instances were found in your cluster. For more information, see the Troubleshooting section of the Amazon ECS Developer Guide.'}, {'createdAt': datetime.datetime(2016, 9, 6, 15, 45, 24, 646000, tzinfo=tzlocal()), 'id': 'b2238f4a-ee05-4cb4-801e-ca2a8e2b1d16', 'message': '(service xmpp_component_service) was unable to place a task because no container instance met all of its requirements. Reason: No Container Instances were found in your cluster. For more information, see the Troubleshooting section of the Amazon ECS Developer Guide.'}], 'pendingCount': 0, 'loadBalancers': [], 'desiredCount': 1, 'serviceName': 'xmpp_component_service', 'clusterArn': 'arn:aws:ecs:eu-west-1:876701361933:cluster/xmpp_component_cluster', 'status': 'ACTIVE', 'serviceArn': 'arn:aws:ecs:eu-west-1:876701361933:service/xmpp_component_service'}]
 
-service_task_def = services_description[0]['taskDefinition']
+#service_task_def = services_description[0]['taskDefinition']
 #print(service_task_def)
 # -> arn:aws:ecs:eu-west-1:876701361933:task-definition/xmpp_component:7
 
-service_task_def_description = cluster.describe_task_definition(service_task_def)
+#service_task_def_description = cluster.describe_task_definition(service_task_def)
 #print(service_task_def_description)
 # -> {'status': 'ACTIVE', 'revision': 7, 'requiresAttributes': [{'name': 'com.amazonaws.ecs.capability.docker-remote-api.1.17'}], 'family': 'xmpp_component', 'volumes': [], 'taskDefinitionArn': 'arn:aws:ecs:eu-west-1:876701361933:task-definition/xmpp_component:7', 'containerDefinitions': [{'readonlyRootFilesystem': True, 'volumesFrom': [], 'mountPoints': [], 'image': 'abunuwas/xmpp-component:v.0.0.1', 'environment': [], 'memory': 100, 'name': 'xmpp_component', 'essential': True, 'cpu': 100, 'portMappings': []}]}
 
