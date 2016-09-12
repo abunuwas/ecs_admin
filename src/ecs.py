@@ -6,7 +6,7 @@ import boto3
 from botocore.exceptions import ClientError
 
 from ec2 import EC2Client
-from core_utils import filter_args
+from core_utils import filter_args, filter_args_deep
 from exceptions import InvalidOperationError, DoesNotExistError
 
 class ECS:
@@ -93,12 +93,12 @@ class ECS:
 						}
 		}
 		api_args.update(kwargs)
-		args = filter_args(api_args)
+		args = filter_args_deep(api_args)
 		try:
 			service = self.ecs_client.create_service(**args)
 			return service['service']
 		except ClientError as e:
-			return str(e)
+			return e
 
 	def list_services(self, cluster):
 		services = self.ecs_client.list_services(cluster=cluster)
