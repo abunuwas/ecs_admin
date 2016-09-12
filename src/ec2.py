@@ -115,8 +115,8 @@ class EC2Client:
 
 	def get_user_data(self, file):
 		with open(file) as file:
-			data = file.read()
-			return data
+			self.user_data = file.read()
+			return self.user_data
 
 	def find_images(self, filters=None, **kwargs):
 		if filters is None:
@@ -252,8 +252,10 @@ class EC2Instance(EC2Client):
 				 aws_parameters=None, 
 				 security_group_description=None, 
 				 key_output=None,
-				 user_data_file=None
+				 user_data_file=None,
+				 user_data=None
 				 ):
+
 		EC2Client.__init__(self, aws_parameters=aws_parameters)
 		self._make_clients() 
 
@@ -270,6 +272,7 @@ class EC2Instance(EC2Client):
 		self.profile_role = profile_role
 
 		self.user_data_file = user_data_file
+		self.user_data = user_data
 
 		self._missing_value_msg = 'Please make sure you have set a value for {value}.'
 
@@ -279,14 +282,15 @@ class EC2Instance(EC2Client):
 		self.ec2_resource = boto3.resource('ec2')
 
 	def get_ready(self):
-		# Make sure you provie a key_output value
+		# Make sure you provide a key_output value
 		# Make sure you create a profile_role with
-		# the IAM client. 
+		# the IAM client and set the attribute to
+		# the profile role arn. 
 		self.get_security_group()
 		self.get_key_pair()
 		self.profile_arn = self.get_instance_profile()
 		self.add_role2profile(self.profile_role, self.profile_name)
-		self.user_data_file = get_user_data()
+		self.user_data = get_user_data()
 		self.launch()
 
 
@@ -310,6 +314,10 @@ class EC2Instance(EC2Client):
 			## This assignment might be wrong. Test by launching an instance with a new security group. 
 			## If it raises an error, it means what we need is the group name, not the group id as returned
 			## by the API call. 
+			## Check first if the group exists. If it doesn't, create it. 
+			## The reason why in this case we first check adn then create
+			## is that we want to allow users to indicate already existing
+			## security groups as a parameter for self.security group. 
 			if self.security_group_description is None:
 				msg = self._missing_value_msg.format(value='self.security_group_description')
 				raise MissingValueError(msg)
@@ -412,3 +420,6 @@ class EC2Instance(EC2Client):
 #for ec2 in ec2s:
 #	description = describe_ec2([ec2._id])[0]
 #	print(description.keys())
+
+ec2 = EC2Instance('xmpp_group', 'xmpp_key', 'xmpp_profile', security_group_description='a security group')
+ec2.get_ready()
