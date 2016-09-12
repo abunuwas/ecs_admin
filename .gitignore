@@ -1,0 +1,15 @@
+config/
+*.pyc
+build/
+deployment_requirements.md
+venv-old/
+venv/
+__pycache__/
+dnspython/
+/fabfile/
+config*
+# Elastic Beanstalk Files
+.elasticbeanstalk/*
+!.elasticbeanstalk/*.cfg.yml
+!.elasticbeanstalk/*.global.yml
+
