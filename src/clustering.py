@@ -1,3 +1,6 @@
+import os
+import time
+
 import boto3
 
 from ecs import ECS
@@ -26,6 +29,7 @@ class Cluster(ECS):
 				 key_name=None,
 				 security_groups=None,
 				 user_data=None,
+				 profile=None,
 				 lambda_role=None, 
 				 aws_parameters=None
 				 ):
@@ -65,6 +69,7 @@ class Cluster(ECS):
 		:param key_name: name of the ssh key pair to be used when 
 			creating EC2 instances within the cluster.b 
 		'''
+
 		self.app_name = app_name 
 
 		# The following parameters are automatically assigned
@@ -99,6 +104,9 @@ class Cluster(ECS):
 		self.user_data_file = user_data_file
 		self.user_data = user_data
 		self.security_groups = security_groups
+		if self.security_groups is None:
+			self.security_groups = []
+		self.profile = profile
 		self._instances = []
 
 		self.lambda_role = lambda_role
@@ -110,6 +118,7 @@ class Cluster(ECS):
 		## Allow passing aws connection parameters to get
 		## the connections. 
 		self.ec2 = EC2Instance(None, None, None)
+		self.ec2.user_data_file = user_data_file
 		self.iam = IAM()
 		self.sns = SNS()
 		self.awslambda = Lambda()
@@ -137,7 +146,10 @@ class Cluster(ECS):
 	def get_ready(self):
 		if self.container_definitions == []:
 			self.define_container()
-		self.user_data = self.ec2.get_user_data(self.user_data_file)
+		self.default_ec2_instance_profile()
+		if self.security_groups == []:
+			self.default_security_group()
+		self.default_key_pair()
 		self.ec2.get_ready()
 
 	def create(self):
@@ -146,18 +158,23 @@ class Cluster(ECS):
 		#task_role = self.create_role(path=self.app_name,
 		#						role_name=self.task_name,
 		#						policy_trust=task_role_policy)
-		if container is None:
-			msg = '''Please define a container to run within the cluster.
-					 You can run the Cluster.get_ready() method to obtain
-					 a default definition. 
-				  '''
+		if self.container_definitions is None:
+			msg = "Please define a container to run within the cluster. " \
+				  "You can run the Cluster.get_ready() method to obtain " \
+				  "a default definition." 				  
 			raise MissingValueError(msg)
 		cluster = self.create_cluster()
+		time.sleep(2)
 		self.create_task_definition()
+		time.sleep(2)
 		self.create_service()
-		self.profile = default_ec2_instance_profile()
+		time.sleep(2)
+		self.ec2.launch()
+		time.sleep(3)
+		return self.describe()
 
-		return profile 
+	def describe(self):
+		return self.describe_cluster(cluster_name=self.cluster_name)
 
 	def clearup(self):
 		pass
@@ -242,17 +259,27 @@ class Cluster(ECS):
 	def list_policies(self, **kwargs):
 		return self.iam.list_policies(**kwargs)
 
-	def default_ec2_instance_profile(self):
-		ecs_instance_role = create_role(role_name='ec2InstanceRole', policy_trust=ec2_trust_policy)
-		ecs_policy = create_policy(policy_name='ecs_role_policy', policy_document=ecs_role_policy)
-		iam.attach_policy(role_name='ec2InstanceRole', policy_arn=ecs_policy)
-		profile = create_instance_profile(name='ec2InstanceProfileECS')
-		response = ec2.add_role2profile(role_name='ec2InstanceRole',
-									profile_name='ec2InstanceProfileECS')
-		return profile
+	def get_instance_profile(self, **kwargs):
+		return self.ec2.get_instance_profile(**kwargs)
 
-	def get_default_security_group(self):
-		pass
+	def default_key_pair(self):
+		self.ec2.key_name = 'ecs_key'
+		return self.ec2.key_name
+
+	def default_security_group(self):
+		self.ec2.security_groups.insert(0, 'ecs_security_group')
+		self.ec2.security_groups_description = 'A security group for EC2 instances running in ECS.'
+		return self.ec2.security_groups, self.ec2.security_groups_description
+
+	def default_ec2_instance_profile(self):
+		ecs_instance_role = self.iam.create_role(role_name='ec2InstanceRole', policy_trust=ec2_trust_policy)
+		print('ECS instancde role: ', ecs_instance_role)
+		ecs_policy = self.iam.create_policy(policy_name='ecs_role_policy', policy_document=ecs_role_policy)
+		print('ECS policy: ', ecs_policy)
+		self.iam.attach_policy(role_name='ec2InstanceRole', policy_arn=ecs_policy)
+		self.ec2.profile_name = 'ec2InstanceProfileECS'
+		self.ec2.profile_role = 'ec2InstanceRole'
+		return self.ec2.profile_name
 
 	def default_ecs_lambda_role(self):
 		#lambda_role = iam_client.create_role(role_name='lambda_ecs_role', policy_trust=task_role_policy)
@@ -323,10 +350,13 @@ class Cluster(ECS):
 
 
 
-cluster_name = 'xmpp_component'
+app_name = 'xmpp_component'
 
-cluster = Cluster(app_name=cluster_name, image='abunuwas/xmpp-component:v.0.0.1', user_data_file='docker-login.txt')
+user_data_file = os.path.abspath('docker-login.txt')
+
+cluster = Cluster(app_name=app_name, image='abunuwas/xmpp-component:v.0.0.1', user_data_file=user_data_file)
 cluster.get_ready()
+cluster.create()
 
 #instance = launch_ec2(key_name=key_name, security_groups=security_groups, user_data=, profile_arn=user_data)
 
