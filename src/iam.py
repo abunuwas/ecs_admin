@@ -52,7 +52,7 @@ class IAM:
 			return request
 		except ClientError as e:
 			if e.response['Error']['Code'] == 'EntityAlreadyExists':
-				raise EntityExists		
+				raise EntityExistsError		
 		return policy
 
 	auto_scaling_group = ''
@@ -68,7 +68,7 @@ class IAM:
 		try:
 			request = self._create_role(**kwargs)
 			role_arn = self._get_role_arn_from_create_request(request)
-		except EntityExists:
+		except EntityExistsError:
 			role_arn = self._get_role_arn(kwargs['role_name'])
 		return role_arn
 
@@ -87,7 +87,7 @@ class IAM:
 			return request
 		except ClientError as e:
 			if e.response['Error']['Code'] == 'EntityAlreadyExists':
-				raise EntityExists
+				raise EntityExistsError
 
 	def _apply_filter(self, filter_params, target):
 	    return all(param in target for param in filter_params)
