@@ -230,7 +230,6 @@ class EC2Client:
 					},
 					#EbsOptimized
 		}
-		print('USER DATA: ', user_data)
 		api_args.update(kwargs)
 		args = filter_args(api_args)
 		instance = self.ec2_client.run_instances(**args)
